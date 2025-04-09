@@ -164,10 +164,10 @@ jobs:
           repo init -u https://github.com/OnePlusOSS/kernel_manifest.git -b oneplus/sm8750 -m JiuGeFaCai_oneplus_13_v.xml
 
           # Check if branch is deprecated
-          if grep -q deprecated <<< $REMOTE_BRANCH; then
-            echo "Found deprecated branch: $FORMATTED_BRANCH"
-            sed -i "s/\"${FORMATTED_BRANCH}\"/\"deprecated\/${FORMATTED_BRANCH}\"/g" $DEFAULT_MANIFEST_PATH
-          fi
+          #if grep -q deprecated <<< $REMOTE_BRANCH; then
+          #  echo "Found deprecated branch: $FORMATTED_BRANCH"
+          #  sed -i "s/\"${FORMATTED_BRANCH}\"/\"deprecated\/${FORMATTED_BRANCH}\"/g" $DEFAULT_MANIFEST_PATH
+          #fi
 
           # Sync repo and apply patches
           $REPO --version
