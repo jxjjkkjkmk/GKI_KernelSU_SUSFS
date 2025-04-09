@@ -162,6 +162,7 @@ jobs:
 
           # Initialize and sync kernel source
           repo init -u https://github.com/OnePlusOSS/kernel_manifest.git -b oneplus/sm8750 -m JiuGeFaCai_oneplus_13_v.xml
+          repo sync -c -j$(nproc --all)
 
           # Check if branch is deprecated
           #if grep -q deprecated <<< $REMOTE_BRANCH; then
