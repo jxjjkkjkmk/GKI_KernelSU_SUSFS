@@ -152,19 +152,18 @@ jobs:
 
           echo "CONFIG set to: $CONFIG"
 
-- name: 初始化和同步内核源代码
-  run: |
-    echo "Creating folder for configuration: $CONFIG..."
-    mkdir -p "$CONFIG"
-    cd "$CONFIG"
+      - name: 初始化和同步内核源代码
+        run: |
+          echo "Creating folder for configuration: $CONFIG..."
+          mkdir -p "$CONFIG"
+          cd "$CONFIG"
 
-    # Initialize and sync kernel source from OnePlus OSS repository
-    echo "Initializing and syncing kernel source from OnePlus OSS..."
-    $REPO init --depth=1 -u https://github.com/OnePlusOSS/kernel_manifest -b sm8750 -m oneplus_13.xml --repo-rev=v2.16
-    
-    # Sync repo and apply patches
-    $REPO --version
-    $REPO --trace sync -c -j$(nproc --all) --no-tags --fail-fast
+          # Initialize and sync kernel source
+          $REPO init --depth=1 -u https://github.com/OnePlusOSS/kernel_manifest -b sm8750 -m oneplus_13.xml --repo-rev=v2.16
+
+          # Sync repo and apply patches
+          $REPO --version
+          $REPO --trace sync -c -j$(nproc --all) --no-tags --fail-fast
 
       - name: 复制文件
         if: ${{ inputs.make_release == false }}
