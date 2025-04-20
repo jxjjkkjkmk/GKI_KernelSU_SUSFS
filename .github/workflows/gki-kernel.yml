@@ -34,9 +34,6 @@ on:
       revision:
         required: false
         type: string
-      version:
-        required: false
-        type: string
 
 jobs:
   build-kernel-kernelsu-susfs:
@@ -80,7 +77,7 @@ jobs:
           ccache --set-config=compression=true
           echo "CCACHE_DIR=$HOME/.ccache" >> $GITHUB_ENV
       
-      - name: 从缓存中还原ccache
+      - name: Restore ccache from cache
         uses: actions/cache@v4
         with:
           path: ~/.ccache
@@ -88,7 +85,7 @@ jobs:
           restore-keys: |
             ${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}-ccache-
       
-      - name: 缓存工具链
+      - name: Cache toolchain
         id: cache-toolchain
         uses: actions/cache@v4
         with:
@@ -98,7 +95,7 @@ jobs:
           key: toolchain-${{ runner.os }}-v1
 
       # Step 2: Download toolchain if cache was not found
-      - name: 下载工具链（如果未找到缓存）
+      - name: Download toolchain (if cache not found)
         if: steps.cache-toolchain.outputs.cache-hit != 'true'
         run: |
           AOSP_MIRROR=https://android.googlesource.com
@@ -106,20 +103,25 @@ jobs:
           git clone $AOSP_MIRROR/kernel/prebuilts/build-tools -b $BRANCH --depth 1 kernel-build-tools
           git clone $AOSP_MIRROR/platform/system/tools/mkbootimg -b $BRANCH --depth 1 mkbootimg
 
-      - name: 设置环境变量
+      - name: Set environment variables
         run: |
           echo "AVBTOOL=$GITHUB_WORKSPACE/kernel-build-tools/linux-x86/bin/avbtool" >> $GITHUB_ENV
           echo "MKBOOTIMG=$GITHUB_WORKSPACE/mkbootimg/mkbootimg.py" >> $GITHUB_ENV
           echo "UNPACK_BOOTIMG=$GITHUB_WORKSPACE/mkbootimg/unpack_bootimg.py" >> $GITHUB_ENV
 
-      - name: 密钥设置——已经过mkppk修改
+      - name: Set boot sign key
         env:
           BOOT_SIGN_KEY: ${{ secrets.BOOT_SIGN_KEY }}
         run: |
-            openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 > ./kernel-build-tools/linux-x86/share/avb/testkey_rsa2048.pem
+          if [ ! -z "$BOOT_SIGN_KEY" ]; then
+            echo "$BOOT_SIGN_KEY" > ./kernel-build-tools/linux-x86/share/avb/testkey_rsa2048.pem
             echo "BOOT_SIGN_KEY_PATH=$GITHUB_WORKSPACE/kernel-build-tools/linux-x86/share/avb/testkey_rsa2048.pem" >> $GITHUB_ENV
+          else
+            echo "BOOT_SIGN_KEY is not set. Exiting..."
+            exit 1
+          fi
 
-      - name: 安装仓库
+      - name: Install Repo
         run: |
           # Install dependencies
           mkdir -p ./git-repo
@@ -127,7 +129,7 @@ jobs:
           chmod a+rx ./git-repo/repo
           echo "REPO=$GITHUB_WORKSPACE/./git-repo/repo" >> $GITHUB_ENV
 
-      - name: 克隆 AnyKernel3 和其他依赖项
+      - name: Clone AnyKernel3 and Other Dependencies
         run: |
           echo "Cloning AnyKernel3 and other dependencies..."
 
@@ -142,7 +144,7 @@ jobs:
           git clone https://gitlab.com/simonpunk/susfs4ksu.git -b "$SUSFS_BRANCH"
           git clone https://github.com/WildPlusKernel/kernel_patches.git
 
-      - name: 设置 CONFIG 环境变量
+      - name: Set CONFIG Environment Variable
         run: |
           # Set CONFIG dynamically based on inputs values
           CONFIG="${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.sub_level }}"
@@ -152,7 +154,7 @@ jobs:
 
           echo "CONFIG set to: $CONFIG"
 
-      - name: 初始化和同步内核源代码
+      - name: Initialize and Sync Kernel Source
         run: |
           echo "Creating folder for configuration: $CONFIG..."
           mkdir -p "$CONFIG"
@@ -160,35 +162,40 @@ jobs:
 
           # Initialize and sync kernel source
           echo "Initializing and syncing kernel source..."
-repo init -u https://github.com/OnePlusOSS/kernel_manifest.git -b refs/heads/oneplus/sm8750 -m oneplus_13.xml --depth=1
-         repo sync
-         rm kernel_platform/common/android/abi_gki_protected_exports_* || echo "No protected exports!"
-         rm kernel_platform/msm-kernel/android/abi_gki_protected_exports_* || echo "No protected exports!"
-         sed -i 's/ -dirty//g' kernel_platform/common/scripts/setlocalversion
-         sed -i 's/ -dirty//g' kernel_platform/msm-kernel/scripts/setlocalversion
+          FORMATTED_BRANCH="${{ inputs.android_version }}-${{ inputs.kernel_version }}-${{ inputs.os_patch_level }}"
+          $REPO init --depth=1 --u https://android.googlesource.com/kernel/manifest -b common-${FORMATTED_BRANCH} --repo-rev=v2.16
+
+          REMOTE_BRANCH=$(git ls-remote https://android.googlesource.com/kernel/common ${FORMATTED_BRANCH})
+          DEFAULT_MANIFEST_PATH=.repo/manifests/default.xml
+
+          # Check if branch is deprecated
+          if grep -q deprecated <<< $REMOTE_BRANCH; then
+            echo "Found deprecated branch: $FORMATTED_BRANCH"
+            sed -i "s/\"${FORMATTED_BRANCH}\"/\"deprecated\/${FORMATTED_BRANCH}\"/g" $DEFAULT_MANIFEST_PATH
+          fi
 
           # Sync repo and apply patches
           $REPO --version
           $REPO --trace sync -c -j$(nproc --all) --no-tags --fail-fast
 
-      - name: 复制文件
+      - name: Copy file
         if: ${{ inputs.make_release == false }}
         run: |
           cp -r $CONFIG source-clean-$CONFIG
 
-      - name: 上传资产
+      - name: Upload artifact
         if: ${{ inputs.make_release == false }}
         uses: actions/upload-artifact@v4
         with:
           name: source-clean-${{ env.CONFIG }}
           path: source-clean-${{ env.CONFIG }}
 
-      - name: 移除文件
+      - name: Remove file
         if: ${{ inputs.make_release == false }}
         run: |
           rm -rf source-clean-$CONFIG
 
-      - name: 确定 KernelSU 的分支
+      - name: Determine the branch for KernelSU
         run: |
           if [[ "${{ inputs.kernelsu_branch }}" == "Stable" ]]; then
               echo "BRANCH=-" >> $GITHUB_ENV
@@ -203,7 +210,7 @@ repo init -u https://github.com/OnePlusOSS/kernel_manifest.git -b refs/heads/one
             exit 1
           fi
       
-      - name: 添加 KernelSU
+      - name: Add KernelSU
         run: |
           echo "Changing to configuration directory: $CONFIG..."
           cd "$CONFIG"
@@ -220,7 +227,7 @@ repo init -u https://github.com/OnePlusOSS/kernel_manifest.git -b refs/heads/one
             curl -LSs "https://raw.githubusercontent.com/5ec1cff/KernelSU/main/kernel/setup.sh" | bash $BRANCH
           fi
           
-      - name: 为 KernelSU 变体安装 SUSFS 补丁
+      - name: Apply SUSFS Patches for KernelSU Variants
         run: |
           echo "Changing to configuration directory: $CONFIG..."
           cd "$CONFIG"
@@ -263,7 +270,7 @@ repo init -u https://github.com/OnePlusOSS/kernel_manifest.git -b refs/heads/one
           cd ../common
           patch -p1 < 50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch || true
 
-      - name: 应用新的HOOKS补丁
+      - name: Apply New Hooks Patches
         run: |
           echo "Changing to configuration directory: $CONFIG..."
           cd "$CONFIG/common"
@@ -282,7 +289,7 @@ repo init -u https://github.com/OnePlusOSS/kernel_manifest.git -b refs/heads/one
           #  patch -p1 -F 3 < ksu_hooks.patch
           fi
           
-      - name: 应用隐藏某特征的补丁
+      - name: Apply Hide Stuff Patches
         run: |
           echo "Changing to configuration directory: $CONFIG..."
           cd "$CONFIG/common"
@@ -290,7 +297,7 @@ repo init -u https://github.com/OnePlusOSS/kernel_manifest.git -b refs/heads/one
           cp ../../kernel_patches/69_hide_stuff.patch ./
           patch -p1 -F 3 < 69_hide_stuff.patch
             
-      - name: 添加SUSFS配置设置
+      - name: Add SUSFS Configuration Settings
         run: |
           echo "Changing to configuration directory: $CONFIG..."
           cd "$CONFIG"
@@ -339,7 +346,7 @@ repo init -u https://github.com/OnePlusOSS/kernel_manifest.git -b refs/heads/one
           # Remove check_defconfig
           sed -i 's/check_defconfig//' ./common/build.config.gki
       
-      - name: 配置 BBR
+      - name: Config BBR
         #if: ${{ inputs.kernel_version != '6.6' }}
         run: |
           cd "$CONFIG/common"
@@ -354,12 +361,12 @@ repo init -u https://github.com/OnePlusOSS/kernel_manifest.git -b refs/heads/one
           echo "CONFIG_TCP_CONG_WESTWOOD=n" >> ./common/arch/arm64/configs/gki_defconfig
           echo "CONFIG_TCP_CONG_HTCP=n" >> ./common/arch/arm64/configs/gki_defconfig 
 
-      - name: 配置内核名称
+      - name: Config Kernel Name
         run: |
           echo "Changing to configuration directory: $CONFIG..."
           cd "$CONFIG"
 
-          sed -i '$s|echo "\$res"|echo "${{ inputs.version }}"|' ./common/scripts/setlocalversion
+          sed -i '$s|echo "\$res"|echo "\$res-Wild+"|' ./common/scripts/setlocalversion
 
           # Run perl command to modify UTS_VERSION
           perl -pi -e 's{UTS_VERSION="\$\(echo \$UTS_VERSION \$CONFIG_FLAGS \$TIMESTAMP \| cut -b -\$UTS_LEN\)"}{UTS_VERSION="#1 SMP PREEMPT Sat Apr 20 04:20:00 UTC 2024"}' ./common/scripts/mkcompile_h
@@ -370,22 +377,22 @@ repo init -u https://github.com/OnePlusOSS/kernel_manifest.git -b refs/heads/one
           else
             rm -rf ./common/android/abi_gki_protected_exports_*
             sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" ./build/kernel/kleaf/impl/stamp.bzl
-            sed -E -i '/^CONFIG_LOCALVERSION=/ s/(.*)"$/\1"/' ./common/arch/arm64/configs/gki_defconfig
+            sed -E -i '/^CONFIG_LOCALVERSION=/ s/(.*)"$/\1-Wild+"/' ./common/arch/arm64/configs/gki_defconfig
           fi
 
-      - name: 复制文件
+      - name: Copy file
         if: ${{ inputs.make_release == false }}
         run: |
           cp -r $CONFIG source-patched-$CONFIG
 
-      - name: 上传资产
+      - name: Upload artifact
         if: ${{ inputs.make_release == false }}
         uses: actions/upload-artifact@v4
         with:
           name: source-patched-${{ env.CONFIG }}
           path: source-patched-${{ env.CONFIG }}
 
-      - name: 移除文件
+      - name: Remove file
         if: ${{ inputs.make_release == false }}
         run: |
           rm -rf source-patched-$CONFIG
@@ -408,7 +415,7 @@ repo init -u https://github.com/OnePlusOSS/kernel_manifest.git -b refs/heads/one
             fi
             ccache --show-stats
             
-      - name: 创建Bootimgs文件夹并复制图像
+      - name: Create Bootimgs Folder and Copy Images
         if: ${{ inputs.android_version == 'android12' || inputs.android_version == 'android13' }}
         run: |
           echo "Changing to configuration directory: $CONFIG..."
@@ -423,7 +430,7 @@ repo init -u https://github.com/OnePlusOSS/kernel_manifest.git -b refs/heads/one
           # Create gzip of the Image file
           gzip -n -k -f -9 ./Image > ./Image.gz
 
-      - name: 创建Bootimgs文件夹并复制图像
+      - name: Create Bootimgs Folder and Copy Images
         if: ${{ inputs.android_version == 'android14' || inputs.android_version == 'android15' }}
         run: |
           echo "Changing to configuration directory: $CONFIG..."
@@ -438,7 +445,7 @@ repo init -u https://github.com/OnePlusOSS/kernel_manifest.git -b refs/heads/one
           # Create gzip of the Image file
           gzip -n -k -f -9 ./Image > ./Image.gz
 
-      - name: 创建不同格式的ZIP文件
+      - name: Create ZIP Files for Different Formats
         run: |
           echo "Creating zip files for all formats..."
           cd ./AnyKernel3
@@ -462,7 +469,7 @@ repo init -u https://github.com/OnePlusOSS/kernel_manifest.git -b refs/heads/one
           zip -r "../$ZIP_NAME" ./*
           rm ./Image.gz
 
-      - name: 运行boot镜像 ${{ inputs.android_version }} 编译脚本
+      - name: Run Boot Image ${{ inputs.android_version }} Build Script
         if: ${{ inputs.android_version == 'android12' }}
         run: |
           echo "Changing to configuration directory: $CONFIG..."
@@ -512,7 +519,7 @@ repo init -u https://github.com/OnePlusOSS/kernel_manifest.git -b refs/heads/one
           $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot-lz4.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
           cp ./boot-lz4.img ../${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-boot-lz4.img
 
-      - name: 运行boot镜像 ${{ inputs.android_version }} 编译脚本
+      - name: Run Boot Image ${{ inputs.android_version }} Build Script
         if: ${{ inputs.android_version == 'android13' || inputs.android_version == 'android14' || inputs.android_version == 'android15' }}
         run: |
           cd bootimgs
@@ -535,7 +542,7 @@ repo init -u https://github.com/OnePlusOSS/kernel_manifest.git -b refs/heads/one
           $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot-lz4.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
           cp ./boot-lz4.img ../${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-boot-lz4.img
 
-      - name: 上传编译资产
+      - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: kernel-${{ env.CONFIG }}
